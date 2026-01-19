@@ -73,10 +73,5 @@ flutter run -d web-server
 ## 📸 Screenshots
 ![Treasure Hunt Map Screen](assets/image.png)
 
-## 📜 Future Roadmap
-
-* **Speed Validation:** Add warnings if the user is moving at vehicle speeds (cheating detection).
-* **Leveling System:** A progress bar that fills up as more gold is collected.
-* **Pirate Theme:** Apply a custom "Old Scroll" Map Style to the Google Maps background.
 
 ---
