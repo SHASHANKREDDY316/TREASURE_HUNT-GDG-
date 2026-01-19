@@ -71,6 +71,7 @@ flutter run -d web-server
 
 
 ## 📸 Screenshots
+![alt text](image.png)
 
 ## 📜 Future Roadmap
 
