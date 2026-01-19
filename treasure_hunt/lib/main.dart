@@ -3,24 +3,27 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'dart:math' as math;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Firebase correctly for Web
-  // REPLACE THESE PLACEHOLDERS with values from your Firebase Console
+  // REPLACE with your actual Firebase Web Config
   await Firebase.initializeApp(
     options: const FirebaseOptions(
-      apiKey: "YOUR_FIREBASE_WEB_API_KEY",
-      authDomain: "your-project-id.firebaseapp.com",
-      projectId: "your-project-id",
-      storageBucket: "your-project-id.appspot.com",
-      messagingSenderId: "your-sender-id",
-      appId: "your-app-id",
+      apiKey: "YOUR_API_KEY",
+      authDomain: "your-project.firebaseapp.com",
+      projectId: "your-project",
+      storageBucket: "your-project.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:12345:web:abcde",
     ),
   );
   
-  runApp(const MaterialApp(home: TreasureHuntMap()));
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: TreasureHuntMap(),
+  ));
 }
 
 class TreasureHuntMap extends StatefulWidget {
@@ -29,83 +32,187 @@ class TreasureHuntMap extends StatefulWidget {
   State<TreasureHuntMap> createState() => _TreasureHuntMapState();
 }
 
-class _TreasureHuntMapState extends State<TreasureHuntMap> {
-  List<DocumentSnapshot> _stopDocs = [];
+class _TreasureHuntMapState extends State<TreasureHuntMap> with TickerProviderStateMixin {
+  GoogleMapController? _mapController;
+  final TextEditingController _distController = TextEditingController();
+  final TextEditingController _latController = TextEditingController();
+  final TextEditingController _lngController = TextEditingController();
+
+  LatLng _fromLocation = const LatLng(12.9716, 77.5946);
+  LatLng? _targetLocation;
+  double _currentBearing = 0.0;
+  int _gold = 0;
+  bool _showWinAnimation = false;
+  
+  late AnimationController _pulseController;
+  late AnimationController _winController;
 
   @override
   void initState() {
     super.initState();
-    _startTracking();
+    _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
+    _winController = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    
+    _latController.text = _fromLocation.latitude.toString();
+    _lngController.text = _fromLocation.longitude.toString();
   }
 
-  void _startTracking() {
-    Geolocator.getPositionStream(
-      locationSettings: LocationSettings(accuracy: LocationAccuracy.high)
-    ).listen((Position position) {
-      _checkArrival(position.latitude, position.longitude);
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _winController.dispose();
+    super.dispose();
+  }
+
+  double _calculateBearing(LatLng start, LatLng end) {
+    double dLon = (end.longitude - start.longitude) * (math.pi / 180);
+    double lat1 = start.latitude * (math.pi / 180);
+    double lat2 = end.latitude * (math.pi / 180);
+    double y = math.sin(dLon) * math.cos(lat2);
+    double x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    return math.atan2(y, x);
+  }
+
+  LatLng _projectLocation(LatLng start, double distanceMeters) {
+    const double earthRadius = 6378137; 
+    double bearing = math.pi / 4; 
+    double lat1 = start.latitude * (math.pi / 180);
+    double lon1 = start.longitude * (math.pi / 180);
+    double lat2 = math.asin(math.sin(lat1) * math.cos(distanceMeters / earthRadius) +
+        math.cos(lat1) * math.sin(distanceMeters / earthRadius) * math.cos(bearing));
+    double lon2 = lon1 + math.atan2(math.sin(bearing) * math.sin(distanceMeters / earthRadius) * math.cos(lat1),
+        math.cos(distanceMeters / earthRadius) - math.sin(lat1) * math.sin(lat2));
+    return LatLng(lat2 * (180 / math.pi), lon2 * (180 / math.pi));
+  }
+
+  void _triggerWin() {
+    setState(() {
+      _showWinAnimation = true;
+      _gold += 500;
+    });
+    _winController.forward(from: 0).then((_) {
+      Future.delayed(const Duration(seconds: 2), () {
+        setState(() => _showWinAnimation = false);
+      });
     });
   }
 
-  void _checkArrival(double userLat, double userLng) {
-    for (var doc in _stopDocs) {
-      try {
-        if (doc.get('isFound') == true) continue; 
+  void _calculatePath() {
+    double? lat = double.tryParse(_latController.text);
+    double? lng = double.tryParse(_lngController.text);
+    double? dist = double.tryParse(_distController.text);
 
-        double dist = Geolocator.distanceBetween(
-          userLat, userLng, doc['latitude'], doc['longitude']
-        );
-
-        if (dist < 50) { 
-          _unlockStop(doc.id, doc['title']);
-        }
-      } catch (e) {
-        // This catches cases where 'isFound' might be missing in a document
-        continue;
-      }
+    if (lat != null && lng != null && dist != null) {
+      setState(() {
+        _fromLocation = LatLng(lat, lng);
+        _targetLocation = _projectLocation(_fromLocation, dist);
+        _currentBearing = _calculateBearing(_fromLocation, _targetLocation!);
+      });
+      _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_fromLocation, 16));
     }
-  }
-
-  void _unlockStop(String id, String name) {
-    FirebaseFirestore.instance.collection('stops').doc(id).update({'isFound': true});
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("✨ Goal Reached: $name!"), 
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 3),
-      )
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Treasure Run MVP")),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('stops').snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}"));
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+      body: Stack(
+        children: [
+          // 1. MAP LAYER
+          GoogleMap(
+            onMapCreated: (controller) => _mapController = controller,
+            initialCameraPosition: CameraPosition(target: _fromLocation, zoom: 15),
+            markers: {
+              Marker(markerId: const MarkerId("h"), position: _fromLocation, icon: BitmapDescriptor.defaultMarkerWithHue(210.0)),
+              if (_targetLocation != null) Marker(markerId: const MarkerId("t"), position: _targetLocation!, icon: BitmapDescriptor.defaultMarkerWithHue(30.0)),
+            },
+            polylines: _targetLocation == null ? {} : {
+              Polyline(
+                polylineId: const PolylineId("path"),
+                points: [_fromLocation, _targetLocation!],
+                color: Colors.amber,
+                width: 4,
+                patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+              )
+            },
+            circles: _targetLocation == null ? {} : {
+              Circle(
+                circleId: const CircleId("p"),
+                center: _targetLocation!,
+                radius: 10 + (40 * _pulseController.value),
+                fillColor: Colors.amber.withOpacity(0.3),
+                strokeWidth: 0,
+              )
+            },
+          ),
 
-          _stopDocs = snapshot.data!.docs;
+          // 2. HUD: COMPASS (Top Right)
+          Positioned(
+            top: 50,
+            right: 20,
+            child: AnimatedRotation(
+              turns: _currentBearing / (2 * math.pi),
+              duration: const Duration(milliseconds: 1000),
+              curve: Curves.elasticOut,
+              child: const Icon(Icons.navigation, color: Colors.deepOrange, size: 80),
+            ),
+          ),
 
-          final markers = _stopDocs.map((doc) {
-            return Marker(
-              markerId: MarkerId(doc.id),
-              position: LatLng(doc['latitude'], doc['longitude']),
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                doc['isFound'] == true ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueRed
+          // 3. HUD: GOLD COUNTER (Top Left)
+          Positioned(
+            top: 50,
+            left: 20,
+            child: TweenAnimationBuilder(
+              tween: Tween<double>(begin: 1, end: _showWinAnimation ? 1.4 : 1.0),
+              duration: const Duration(milliseconds: 300),
+              builder: (context, scale, child) => Transform.scale(
+                scale: scale,
+                child: Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.amber)),
+                  child: Text("💰 $_gold GOLD", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
               ),
-              infoWindow: InfoWindow(title: doc['title']),
-            );
-          }).toSet();
+            ),
+          ),
 
-          return GoogleMap(
-            initialCameraPosition: const CameraPosition(target: LatLng(12.9716, 77.5946), zoom: 14),
-            markers: markers,
-            myLocationEnabled: true,
-          );
-        },
+          // 4. WIN OVERLAY (Pop-up Animation)
+          if (_showWinAnimation)
+            Center(
+              child: ScaleTransition(
+                scale: CurvedAnimation(parent: _winController, curve: Curves.bounceOut),
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.card_giftcard, size: 150, color: Colors.amber),
+                    Text("TREASURE FOUND!", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white, shadows: [Shadow(blurRadius: 10, color: Colors.black)])),
+                  ],
+                ),
+              ),
+            ),
+
+          // 5. CONTROL PANEL
+          Positioned(
+            bottom: 20,
+            left: 15,
+            right: 15,
+            child: Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(color: Colors.brown.shade900.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: _distController, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Meters to Treasure", labelStyle: TextStyle(color: Colors.amber))),
+                  const SizedBox(height: 10),
+                  ElevatedButton(
+                    onPressed: () { _calculatePath(); _triggerWin(); },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, minimumSize: const Size(double.infinity, 50)),
+                    child: const Text("FIND TREASURE!", style: TextStyle(fontWeight: FontWeight.bold)),
+                  )
+                ],
+              ),
+            ),
+          )
+        ],
       ),
     );
   }
