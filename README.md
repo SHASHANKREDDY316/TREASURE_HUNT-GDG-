@@ -71,7 +71,7 @@ flutter run -d web-server
 
 
 ## 📸 Screenshots
-![alt text](image.png)
+![Treasure Hunt Map Screen](assets/image.png)
 
 ## 📜 Future Roadmap
 
